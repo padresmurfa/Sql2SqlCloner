@@ -103,6 +103,14 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
         private void InitServer(Server serv)
         {
             serv.SetDefaultInitFields(true);
+            //Database.DefaultSchema cannot be retrieved when the connecting login authenticates via a
+            //Windows/AD group (such logins have no user-level DEFAULT_SCHEMA). With prefetch-all enabled,
+            //SMO eagerly loads every Database property when the scripter calls SetParent on the database,
+            //so that one unavailable property makes EVERY object fail to script with
+            //"Property DefaultSchema is not available for Database '[...]'". Exclude Database from the
+            //prefetch-all set: its properties are then loaded lazily only when actually needed (the
+            //scripter never needs DefaultSchema), while child objects (tables, views, ...) still prefetch.
+            serv.SetDefaultInitFields(typeof(Database), false);
         }
 
         private void ResetTransfer()
