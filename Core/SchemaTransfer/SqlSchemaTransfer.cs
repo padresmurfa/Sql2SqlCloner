@@ -319,17 +319,15 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                 {
                     namewithschema = $"{obj.GetType().GetProperty("Schema").GetValue(obj, null)}.{namewithschema}";
                 }
-                //the destination object is stored under the (possibly renamed) schema, so compare against the mapped name
-                var destNameWithSchema = CloneConfig.Current?.MapQualifiedName(namewithschema) ?? namewithschema;
 
                 if (dropIfExists)
                 {
-                    if (DestinationObjects.Any(d => d.Name == destNameWithSchema || d.Name == obj.Name))
+                    if (DestinationObjects.Any(d => d.Name == namewithschema || d.Name == obj.Name))
                     {
                         transfer.Options.ScriptDrops = true;
                         foreach (var script in transfer.ScriptTransfer())
                         {
-                            command.CommandText = CloneConfig.Current?.ApplySchemaRenames(script) ?? script;
+                            command.CommandText = script;
                             command.ExecuteNonQuery();
                         }
                     }
@@ -426,13 +424,12 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                         continue;
                     }
 
-                    //create schema if not exists (under the renamed destination name when remapping)
+                    //create schema if not exists
                     var schemaname = obj.GetType().GetProperty("Schema")?.GetValue(obj, null).ToString();
                     if (!string.IsNullOrEmpty(schemaname) && !existingschemas.Contains(schemaname))
                     {
-                        var destschemaname = CloneConfig.Current?.MapSchema(schemaname) ?? schemaname;
                         command.CommandText =
-                            $"IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name=N'{destschemaname}') EXEC('CREATE SCHEMA [{destschemaname}]{GetSchemaAuthorization(obj.Name)}')";
+                            $"IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name=N'{schemaname}') EXEC('CREATE SCHEMA [{schemaname}]{GetSchemaAuthorization(obj.Name)}')";
                         command.ExecuteNonQuery();
                         existingschemas.Add(schemaname);
                     }
@@ -483,9 +480,6 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                                 .Replace(" FROM  EXTERNAL PROVIDER", "");
                         }
                     }
-
-                    //rewrite schema-qualified identifiers to the destination schema when remapping
-                    scriptRun = CloneConfig.Current?.ApplySchemaRenames(scriptRun) ?? scriptRun;
 
                     try
                     {
@@ -1189,14 +1183,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                     firstRun = false;
                 }
 
-                //destination objects carry the (possibly renamed) schema; match the source object by its mapped name
-                var sourceObject = SourceObjects.SingleOrDefault(s =>
-                    (CloneConfig.Current?.MapQualifiedName(s.Name) ?? s.Name) == obj.Name && s.Type == obj.Type);
-                if (sourceObject == null)
-                {
-                    continue;
-                }
-                RecreateObjects.Add(sourceObject);
+                RecreateObjects.Add(SourceObjects.Single(s => s.Name == obj.Name && s.Type == obj.Type));
                 try
                 {
                     if (DestinationObjects.Any(d => d.Type == obj.Type && d.Name == obj.Name))
@@ -1617,23 +1604,21 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
         {
             if (obj is Table tb)
             {
-                var mappedSchema = CloneConfig.Current?.MapSchema(tb.Schema) ?? tb.Schema;
                 try
                 {
-                    return destinationDatabase.Tables[tb.Name, mappedSchema];
+                    return destinationDatabase.Tables[tb.Name, tb.Schema];
                 }
                 catch
                 {
-                    throw new Exception($"Table {tb.Owner}.{mappedSchema} not found");
+                    throw new Exception($"Table {tb.Owner}.{tb.Schema} not found");
                 }
             }
             else
             {
                 var vw = obj as View;
-                var mappedSchema = CloneConfig.Current?.MapSchema(vw.Schema) ?? vw.Schema;
                 try
                 {
-                    return destinationDatabase.Views[vw.Name, mappedSchema] ??
+                    return destinationDatabase.Views[vw.Name, vw.Schema] ??
                            (TableViewBase)destinationDatabase.Views[vw.Name, vw.Owner];
                 }
                 catch
@@ -1890,8 +1875,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                     IsEnabled = sourcefk.IsEnabled,
                     NotForReplication = !disableNotForReplication && sourcefk.NotForReplication,
                     ReferencedTable = sourcefk.ReferencedTable,
-                    //remap the referenced table's schema when its schema is being renamed
-                    ReferencedTableSchema = CloneConfig.Current?.MapSchema(sourcefk.ReferencedTableSchema) ?? sourcefk.ReferencedTableSchema,
+                    ReferencedTableSchema = sourcefk.ReferencedTableSchema,
                     UpdateAction = sourcefk.UpdateAction
                 };
 

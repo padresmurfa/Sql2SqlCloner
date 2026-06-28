@@ -44,12 +44,11 @@ options:                          # the copy toggles (formerly the GUI checkboxe
   decryptObjects: false           # decrypt WITH ENCRYPTION objects via DAC (needs 'sa' / SQL2SQL_DAC_PASSWORD)
   incrementalDataCopy: false      # skip rows that already exist (unique-key based); ignored if deleteDestinationTables
 
-schemas:                          # OMIT this whole section to copy every non-system schema with no renaming.
-  - source: dbo                   # copy dbo as-is
-  - source: sales                 # copy 'sales' ...
-    destination: sales_archive    # ... into 'sales_archive' on the destination
+schemas:                          # OPTIONAL include filter. OMIT this whole section to copy every
+                                  # non-system schema. When present, only the listed schemas are copied.
+  - source: dbo
+  - source: sales
   - source: hr
-    destination: people
 
 engine:                           # tuning (formerly <appSettings>)
   batchSize: 5000                 # SqlBulkCopy batch size

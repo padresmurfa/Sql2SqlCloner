@@ -20,8 +20,7 @@ namespace Sql2SqlCloner.Core
         private sealed class TablePlan
         {
             public SqlSchemaTable Item;
-            public string SourceTableName;
-            public string DestTableName;
+            public string TableName;
             public string Sql;
             public long Top;
         }
@@ -102,8 +101,7 @@ namespace Sql2SqlCloner.Core
                 var fields = " *";
                 if (convertCollation && sourceTables.TryGetValue(item.Name, out var sourceTable))
                 {
-                    var destTableName = CloneConfig.Current.MapQualifiedName(item.Name);
-                    if (destinationTables.TryGetValue(destTableName, out var destinationTable))
+                    if (destinationTables.TryGetValue(item.Name, out var destinationTable))
                     {
                         var selectList = new StringBuilder();
                         foreach (Column col in sourceTable.Columns)
@@ -129,8 +127,7 @@ namespace Sql2SqlCloner.Core
                 plans.Add(new TablePlan
                 {
                     Item = item,
-                    SourceTableName = item.NameWithBrackets,
-                    DestTableName = SqlSchemaObject.AddBrackets(CloneConfig.Current.MapQualifiedName(item.Name)),
+                    TableName = item.NameWithBrackets,
                     Sql = $"SELECT{stritemTopRecords}{fields} FROM {item.NameWithBrackets} WITH(NOLOCK) {item.WhereFilter} {item.OrderByFields}".Trim(),
                     Top = itemTopRecords
                 });
@@ -161,12 +158,12 @@ namespace Sql2SqlCloner.Core
                 {
                     if (plan.Top != 0)
                     {
-                        DataTransfer.TransferData(plan.DestTableName, plan.SourceTableName, plan.Sql);
+                        DataTransfer.TransferData(plan.TableName, plan.Sql);
                     }
                     //enable table constraints for standalone tables to avoid a single fat transaction at the end
                     if (!plan.Item.HasRelationships)
                     {
-                        DataTransfer.EnableTableConstraints(plan.DestTableName);
+                        DataTransfer.EnableTableConstraints(plan.TableName);
                     }
                     log($"  [{current}/{plans.Count}] {plan.Item.Name}: {plan.Top} records copied");
                 }
