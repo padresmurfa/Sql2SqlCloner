@@ -5,11 +5,16 @@
 #
 # SECRETS: a connectionString may live here only when it carries no password
 # (Azure AD / integrated security / no SQL login). If a SQL-auth connection string
-# omits the password, DO NOT put it here. Provide it instead via environment
-# variables (so it never reaches shell history), otherwise you will be prompted:
+# omits the password, DO NOT put the password here for real databases. Provide it via
+# environment variables (so it never reaches shell history), otherwise you are prompted:
 #   SQL2SQL_SOURCE_PASSWORD   source password
 #   SQL2SQL_DEST_PASSWORD     destination password
 #   SQL2SQL_DAC_PASSWORD      'sa' password for the decrypt DAC (decryptObjects: true)
+#
+# EXCEPTION for NON-SENSITIVE databases (local / disposable test DBs only): you may put
+# the password inline with `insecureLocalTestPassword`. It is stored in clear text, so
+# NEVER use it for production or any real/shared database. The matching SQL2SQL_*_PASSWORD
+# environment variable, if set, takes precedence over it.
 
 source:
   # Example SQL-auth (password supplied via SQL2SQL_SOURCE_PASSWORD or prompt):
@@ -17,7 +22,9 @@ source:
 destination:
   # Example Azure AD (no password needed in the string):
   # connectionString: "Server=mydb.database.windows.net;Database=DestDb;Authentication=Active Directory Default;Encrypt=true"
-  connectionString: "Server=localhost,1433;Database=DestDb;User Id=appuser;TrustServerCertificate=true"
+  connectionString: "Server=localhost,1433;Database=DestDb;User Id=sa;TrustServerCertificate=true"
+  # Inline password — ONLY for non-sensitive local/test databases (see note above):
+  # insecureLocalTestPassword: "your-local-dev-password"
 
 options:                          # the copy toggles (formerly the GUI checkboxes)
   copySchema: true                # create schema objects on the destination

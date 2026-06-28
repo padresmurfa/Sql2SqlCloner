@@ -115,8 +115,10 @@ namespace Sql2SqlCloner
             string sourceConn, destConn, dacConn = null;
             try
             {
-                sourceConn = ResolvePassword(CloneConfig.Current.Source.ConnectionString, "SQL2SQL_SOURCE_PASSWORD", "source");
-                destConn = ResolvePassword(CloneConfig.Current.Destination.ConnectionString, "SQL2SQL_DEST_PASSWORD", "destination");
+                sourceConn = ResolvePassword(CloneConfig.Current.Source.ConnectionString, "SQL2SQL_SOURCE_PASSWORD", "source",
+                    CloneConfig.Current.Source.InsecureLocalTestPassword);
+                destConn = ResolvePassword(CloneConfig.Current.Destination.ConnectionString, "SQL2SQL_DEST_PASSWORD", "destination",
+                    CloneConfig.Current.Destination.InsecureLocalTestPassword);
                 if (doSchema && options.DecryptObjects)
                 {
                     dacConn = BuildDacConnectionString(sourceConn);
@@ -394,7 +396,7 @@ namespace Sql2SqlCloner
             return false;
         }
 
-        private static string ResolvePassword(string connectionString, string envVar, string label)
+        private static string ResolvePassword(string connectionString, string envVar, string label, string insecureLocalTestPassword)
         {
             var builder = new SqlConnectionStringBuilder(connectionString);
             var hasUser = !string.IsNullOrEmpty(builder.UserID);
@@ -406,13 +408,20 @@ namespace Sql2SqlCloner
                 return connectionString;
             }
 
+            //precedence: environment variable, then the insecure inline config password (local/test
+            //databases only), then a masked interactive prompt.
             var password = Environment.GetEnvironmentVariable(envVar);
+            if (string.IsNullOrEmpty(password))
+            {
+                password = insecureLocalTestPassword;
+            }
             if (string.IsNullOrEmpty(password))
             {
                 if (Console.IsInputRedirected)
                 {
                     throw new Exception($"No password for {label} connection ({builder.UserID}@{builder.DataSource}). " +
-                        $"Set the {envVar} environment variable (input is not interactive).");
+                        $"Set the {envVar} environment variable, or add an insecureLocalTestPassword " +
+                        $"to the {label} endpoint for non-sensitive databases (input is not interactive).");
                 }
                 password = PromptMasked($"Password for {label} ({builder.UserID}@{builder.DataSource}): ");
             }
