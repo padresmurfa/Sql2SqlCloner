@@ -1,19 +1,13 @@
-﻿using System;
-using System.Windows.Forms;
+using System;
 
 namespace Sql2SqlCloner
 {
     public static class Program
     {
-        /// <summary>
-        /// The main entry point for the application.
-        /// </summary>
-        [STAThread]
-        private static void Main()
+        private static int Main(string[] args)
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new ChooseConnections());
+            Console.WriteLine("stub");
+            return 0;
         }
     }
 }

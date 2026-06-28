@@ -6,7 +6,6 @@ using Microsoft.SqlServer.Management.SqlParser.Parser;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -376,7 +375,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                         }
 
                         objectName = objectName.Substring(0, currindex + 1).Replace("'", "");
-                        if (!Properties.Settings.Default.DecryptObjects || DACconnection == null)
+                        if (CloneConfig.Current?.Options?.DecryptObjects != true || DACconnection == null)
                         {
                             incompatibleErrorMsg += $" {(incompatSchema + "." + objectName).Replace("'", "")}";
                         }
@@ -469,7 +468,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                                 END";
                             command.CommandText = string.Format(createLoginSql, obj.Name,
                                 string.IsNullOrWhiteSpace(password)
-                                    ? (ConfigurationManager.AppSettings["DefaultPassword"] ?? "D3F@u1TP@s$W0rd!")
+                                    ? (CloneConfig.Current?.Engine?.DefaultPassword ?? "D3F@u1TP@s$W0rd!")
                                     : password);
                             command.ExecuteNonQuery();
                         }
@@ -606,8 +605,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                 var creating_name = false;
                 var objectname_already_replaced = false;
                 var triggerON = false;
-                var RaiserrorTransform = string.Equals(ConfigurationManager.AppSettings["RaiserrorTransform"], "true",
-                    StringComparison.InvariantCultureIgnoreCase);
+                var RaiserrorTransform = CloneConfig.Current?.Engine?.RaiserrorTransform ?? true;
                 if (RaiserrorTransform &&
                     ((sourceDatabase.IsRunningMinimumSQLVersion(SQL_DB_Compatibility.DB_2012) &&
                       destinationDatabase.IsRunningMinimumSQLVersion(SQL_DB_Compatibility.DB_2012)) ||
@@ -1451,7 +1449,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                 return items;
             }
 
-            var alwaysIncludeTables = ConfigurationManager.AppSettings["AlwaysIncludeTables"];
+            var alwaysIncludeTables = CloneConfig.Current?.Engine?.AlwaysIncludeTables;
             IList<string> alwaysIncludeTablesList = new List<string>();
             if (!string.IsNullOrEmpty(alwaysIncludeTables))
             {
@@ -1959,7 +1957,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                         SourceObjects = GetSqlObjects(SourceConnection, sourceDatabase);
                     }
                 }, CancelToken);
-                if (sameserver || (ConfigurationManager.AppSettings["EnablePreload"]?.ToLower() != "true"))
+                if (sameserver || (CloneConfig.Current?.Engine?.EnablePreload != true))
                 {
                     tskSource.Wait(CancelToken);
                 }
@@ -1978,8 +1976,6 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
 
         public void ClearDestinationDatabase(Action<NamedSmoObject> callback = null)
         {
-            var mainContext = Thread.CurrentContext;
-
             var lastError = "";
             if (DestinationObjects.Count == 0)
             {
@@ -2088,7 +2084,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                                     command.ExecuteNonQuery();
                                     processed++;
                                     Monitor.Enter(lockFlag);
-                                    mainContext.DoCallBack(() => callback?.Invoke(obj));
+                                    callback?.Invoke(obj);
                                     Monitor.Exit(lockFlag);
                                 }
                             }
