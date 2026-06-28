@@ -90,9 +90,25 @@ Convert this legacy **non-SDK .NET Framework 4.8 WinForms** app into a **single 
 
 ---
 
-## STATUS — what REMAINS
+## STATUS — COMPLETE
 
-### 🔲 Task 4 — schema remapping in engine  (IN PROGRESS — nothing wired into the engine yet)
+Tasks 4–7 were finished on branch `david/finish-cli-conversion`. The CLI builds clean on
+macOS (`net8.0`) and was verified end-to-end against SQL Server 2022 in Docker:
+schema+data copy with `sales`→`sales_archive` / `hr`→`people` renames (cross-schema FKs
+remapped, bracketed **and** bare schema references rewritten in view/proc bodies, indexes,
+checks, extended properties, matching row counts, copied view/proc execute correctly);
+no-`schemas` (all, no rename); `--schema-only` then `--data-only`; multi-schema subset
+filter; `excludeObjects`; `filterDataLoading` TOP/WHERE; secrets via `SQL2SQL_*` env vars
+(password as a CLI arg is rejected). One change beyond the plan: `InvariantGlobalization`
+had to be set to `false` in the csproj — SMO requires ICU/globalization.
+
+Known limitations of schema rewriting (inherent to script-text rewriting): schema names
+hidden inside dynamic-SQL string literals / `OBJECT_ID('...')` arguments, and schema names
+embedded in clustered-index `MS_Description` extended properties, are NOT rewritten.
+
+The detail below is retained for reference.
+
+### ✅ Task 4 — schema remapping in engine  (DONE)
 Only the `CloneConfig` helpers exist. The engine has **not** been modified to use them. Implement the
 map at every point a schema name flows to the destination. Apply renames only when
 `CloneConfig.Current.HasSchemaRenames` is true; always apply the include-set filter when

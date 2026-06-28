@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -100,6 +101,61 @@ namespace Sql2SqlCloner.Core
         /// <summary>True when at least one schema is renamed (enables the script-rewriting path).</summary>
         public bool HasSchemaRenames =>
             SchemaMap.Any(kv => !string.Equals(kv.Key, kv.Value, StringComparison.OrdinalIgnoreCase));
+
+        private IList<KeyValuePair<string, string>> renamePairs;
+        private IList<KeyValuePair<string, string>> RenamePairs =>
+            renamePairs ??= SchemaMap
+                .Where(kv => !string.Equals(kv.Key, kv.Value, StringComparison.OrdinalIgnoreCase))
+                //longest source schema first so e.g. "sales" cannot partially shadow "sales_archive"
+                .OrderByDescending(kv => kv.Key.Length)
+                .ToList();
+
+        /// <summary>
+        /// Maps the schema part of an unbracketed <c>schema.name</c> identifier
+        /// (e.g. <c>sales.Orders</c> =&gt; <c>sales_archive.Orders</c>). Identity when unmapped.
+        /// </summary>
+        public string MapQualifiedName(string qualifiedName)
+        {
+            if (string.IsNullOrEmpty(qualifiedName) || !HasSchemaRenames)
+            {
+                return qualifiedName;
+            }
+            var idx = qualifiedName.IndexOf('.');
+            if (idx <= 0)
+            {
+                return qualifiedName;
+            }
+            return $"{MapSchema(qualifiedName.Substring(0, idx))}.{qualifiedName.Substring(idx + 1)}";
+        }
+
+        /// <summary>
+        /// Rewrites schema-qualified identifiers in a generated T-SQL script so the destination
+        /// schema name is used for every renamed schema. Handles bracketed (<c>[src].</c>),
+        /// bare (<c>src.</c>), and <c>SCHEMA::[src]</c> references. Schema names hidden inside
+        /// dynamic-SQL string literals / <c>OBJECT_ID('...')</c> arguments are deliberately NOT
+        /// rewritten (script-text rewriting cannot reach them safely).
+        /// </summary>
+        public string ApplySchemaRenames(string script)
+        {
+            if (string.IsNullOrEmpty(script) || !HasSchemaRenames)
+            {
+                return script;
+            }
+            foreach (var pair in RenamePairs)
+            {
+                var src = Regex.Escape(pair.Key);
+                var dst = pair.Value;
+                //bracketed qualifier: [src]. -> [dst].
+                script = Regex.Replace(script, @"\[" + src + @"\]\s*\.", $"[{dst}].", RegexOptions.IgnoreCase);
+                //bare qualifier: src. -> dst. (avoid identifier chars, brackets, dots and string quotes before it)
+                script = Regex.Replace(script, @"(?<![\w\.\]@#$'])" + src + @"(?=\s*\.)", dst, RegexOptions.IgnoreCase);
+                //ALTER AUTHORIZATION ON SCHEMA::[src] / SCHEMA :: src
+                script = Regex.Replace(script, @"(SCHEMA\s*::\s*)\[?" + src + @"\]?(?![\w])", $"$1[{dst}]", RegexOptions.IgnoreCase);
+                //CREATE SCHEMA [src] [AUTHORIZATION ...]
+                script = Regex.Replace(script, @"(CREATE\s+SCHEMA\s+)\[?" + src + @"\]?(?![\w])", $"$1[{dst}]", RegexOptions.IgnoreCase);
+            }
+            return script;
+        }
 
         public static CloneConfig Load(string path)
         {
