@@ -147,9 +147,9 @@ namespace Sql2SqlCloner.Core.DataTransfer
             }
         }
 
-        private IEnumerable<string> GetMapping(ServerConnection cxSource, ServerConnection cxTarget, string sourceTableName, string destTableName)
+        private IEnumerable<string> GetMapping(ServerConnection cxSource, ServerConnection cxTarget, string tableName)
         {
-            return GetSchema(cxSource, sourceTableName).Intersect(GetSchema(cxTarget, destTableName), StringComparer.OrdinalIgnoreCase);
+            return GetSchema(cxSource, tableName).Intersect(GetSchema(cxTarget, tableName), StringComparer.OrdinalIgnoreCase);
         }
 
         private IEnumerable<string> GetSchema(ServerConnection connection, string tableName)
@@ -244,17 +244,8 @@ namespace Sql2SqlCloner.Core.DataTransfer
             return null;
         }
 
-        public bool TransferData(string tableName, string query) =>
-            TransferData(tableName, tableName, query);
-
-        /// <summary>
-        /// Copies rows produced by <paramref name="query"/> (read from the source) into
-        /// <paramref name="destTableName"/>. <paramref name="sourceTableName"/> is used only to resolve the
-        /// source column list; it differs from the destination name when the schema is being renamed.
-        /// </summary>
-        public bool TransferData(string destTableName, string sourceTableName, string query)
+        public bool TransferData(string tableName, string query)
         {
-            var tableName = destTableName;
             SqlDataReader reader = null;
             var strDropIndex = new List<string>();
             try
@@ -305,7 +296,7 @@ namespace Sql2SqlCloner.Core.DataTransfer
 
                 BulkCopy.DestinationTableName = tableName;
                 BulkCopy.ColumnMappings.Clear();
-                GetMapping(SourceConnection, DestinationConnection, sourceTableName, tableName).ToList().
+                GetMapping(SourceConnection, DestinationConnection, tableName).ToList().
                     ForEach(columnName => BulkCopy.ColumnMappings.Add(new SqlBulkCopyColumnMapping(columnName, columnName)));
 
                 using (var command = GetSourceSqlCommand(sqlTimeout, query))

@@ -192,8 +192,7 @@ namespace Sql2SqlCloner.Core
                                 }
                                 else if ((item.Type == "Table" || item.Type == "View") && previousListCount != currList.Count)
                                 {
-                                    var dropStatement = $"IF OBJECT_ID('{item.Object}','{item.Type.Substring(0, 1).Replace("T", "U")}') IS NOT NULL DROP {item.Type.ToUpperInvariant()} {item.Object}";
-                                    lstDelete.Add(CloneConfig.Current?.ApplySchemaRenames(dropStatement) ?? dropStatement);
+                                    lstDelete.Add($"IF OBJECT_ID('{item.Object}','{item.Type.Substring(0, 1).Replace("T", "U")}') IS NOT NULL DROP {item.Type.ToUpperInvariant()} {item.Object}");
                                     //if this table/view is to be deleted, set its triggers as deleted
                                     foreach (var subitem in CopyList.Where(x => x.Parent == item))
                                     {

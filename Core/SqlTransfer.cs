@@ -92,10 +92,7 @@ namespace Sql2SqlCloner.Core
                             {
                                 try
                                 {
-                                    //these statements are generated from SOURCE metadata and executed on the
-                                    //DESTINATION, so any renamed schema must be mapped before running them
-                                    commandDestination.CommandText =
-                                        CloneConfig.Current?.ApplySchemaRenames((string)reader[0]) ?? (string)reader[0];
+                                    commandDestination.CommandText = (string)reader[0];
                                     commandDestination.ExecuteNonQuery();
                                 }
                                 catch { }

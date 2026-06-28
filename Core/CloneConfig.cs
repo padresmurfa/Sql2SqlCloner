@@ -2,8 +2,6 @@ using Sql2SqlCloner.Core.DataTransfer;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -22,27 +20,13 @@ namespace Sql2SqlCloner.Core
         public EndpointConfig Source { get; set; } = new EndpointConfig();
         public EndpointConfig Destination { get; set; } = new EndpointConfig();
         public CloneOptions Options { get; set; } = new CloneOptions();
-        public IList<SchemaMapEntry> Schemas { get; set; } = new List<SchemaMapEntry>();
+        public IList<SchemaEntry> Schemas { get; set; } = new List<SchemaEntry>();
         public EngineConfig Engine { get; set; } = new EngineConfig();
 
         [YamlIgnore]
-        private IDictionary<string, string> schemaMap;
+        private bool schemasResolved;
         [YamlIgnore]
         private ISet<string> includeSchemas;
-
-        /// <summary>
-        /// Case-insensitive source-schema =&gt; destination-schema map.
-        /// Schemas listed without a destination map to themselves.
-        /// </summary>
-        [YamlIgnore]
-        public IDictionary<string, string> SchemaMap
-        {
-            get
-            {
-                EnsureSchemasResolved();
-                return schemaMap;
-            }
-        }
 
         /// <summary>
         /// Set of source schemas to include, or null to include every non-system schema.
@@ -59,103 +43,35 @@ namespace Sql2SqlCloner.Core
 
         private void EnsureSchemasResolved()
         {
-            if (schemaMap != null)
+            if (schemasResolved)
             {
                 return;
             }
-            schemaMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            schemasResolved = true;
             if (Schemas == null || Schemas.Count == 0)
             {
-                //no explicit list: copy all non-system schemas with no renaming
+                //no explicit list: copy every non-system schema
                 includeSchemas = null;
                 return;
             }
             includeSchemas = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in Schemas)
             {
-                if (string.IsNullOrWhiteSpace(entry?.Source))
+                if (!string.IsNullOrWhiteSpace(entry?.Source))
                 {
-                    continue;
+                    includeSchemas.Add(entry.Source.Trim());
                 }
-                var src = entry.Source.Trim();
-                var dst = string.IsNullOrWhiteSpace(entry.Destination) ? src : entry.Destination.Trim();
-                includeSchemas.Add(src);
-                schemaMap[src] = dst;
+            }
+            if (includeSchemas.Count == 0)
+            {
+                //list present but empty/whitespace -> treat as "all"
+                includeSchemas = null;
             }
         }
 
-        /// <summary>Returns the destination schema name for a given source schema (identity if unmapped).</summary>
-        public string MapSchema(string sourceSchema)
-        {
-            if (string.IsNullOrEmpty(sourceSchema))
-            {
-                return sourceSchema;
-            }
-            return SchemaMap.TryGetValue(sourceSchema, out var dest) ? dest : sourceSchema;
-        }
-
-        /// <summary>True when the given source schema should be copied.</summary>
-        public bool IncludesSchema(string sourceSchema) =>
-            IncludeSchemas == null || (sourceSchema != null && IncludeSchemas.Contains(sourceSchema));
-
-        /// <summary>True when at least one schema is renamed (enables the script-rewriting path).</summary>
-        public bool HasSchemaRenames =>
-            SchemaMap.Any(kv => !string.Equals(kv.Key, kv.Value, StringComparison.OrdinalIgnoreCase));
-
-        private IList<KeyValuePair<string, string>> renamePairs;
-        private IList<KeyValuePair<string, string>> RenamePairs =>
-            renamePairs ??= SchemaMap
-                .Where(kv => !string.Equals(kv.Key, kv.Value, StringComparison.OrdinalIgnoreCase))
-                //longest source schema first so e.g. "sales" cannot partially shadow "sales_archive"
-                .OrderByDescending(kv => kv.Key.Length)
-                .ToList();
-
-        /// <summary>
-        /// Maps the schema part of an unbracketed <c>schema.name</c> identifier
-        /// (e.g. <c>sales.Orders</c> =&gt; <c>sales_archive.Orders</c>). Identity when unmapped.
-        /// </summary>
-        public string MapQualifiedName(string qualifiedName)
-        {
-            if (string.IsNullOrEmpty(qualifiedName) || !HasSchemaRenames)
-            {
-                return qualifiedName;
-            }
-            var idx = qualifiedName.IndexOf('.');
-            if (idx <= 0)
-            {
-                return qualifiedName;
-            }
-            return $"{MapSchema(qualifiedName.Substring(0, idx))}.{qualifiedName.Substring(idx + 1)}";
-        }
-
-        /// <summary>
-        /// Rewrites schema-qualified identifiers in a generated T-SQL script so the destination
-        /// schema name is used for every renamed schema. Handles bracketed (<c>[src].</c>),
-        /// bare (<c>src.</c>), and <c>SCHEMA::[src]</c> references. Schema names hidden inside
-        /// dynamic-SQL string literals / <c>OBJECT_ID('...')</c> arguments are deliberately NOT
-        /// rewritten (script-text rewriting cannot reach them safely).
-        /// </summary>
-        public string ApplySchemaRenames(string script)
-        {
-            if (string.IsNullOrEmpty(script) || !HasSchemaRenames)
-            {
-                return script;
-            }
-            foreach (var pair in RenamePairs)
-            {
-                var src = Regex.Escape(pair.Key);
-                var dst = pair.Value;
-                //bracketed qualifier: [src]. -> [dst].
-                script = Regex.Replace(script, @"\[" + src + @"\]\s*\.", $"[{dst}].", RegexOptions.IgnoreCase);
-                //bare qualifier: src. -> dst. (avoid identifier chars, brackets, dots and string quotes before it)
-                script = Regex.Replace(script, @"(?<![\w\.\]@#$'])" + src + @"(?=\s*\.)", dst, RegexOptions.IgnoreCase);
-                //ALTER AUTHORIZATION ON SCHEMA::[src] / SCHEMA :: src
-                script = Regex.Replace(script, @"(SCHEMA\s*::\s*)\[?" + src + @"\]?(?![\w])", $"$1[{dst}]", RegexOptions.IgnoreCase);
-                //CREATE SCHEMA [src] [AUTHORIZATION ...]
-                script = Regex.Replace(script, @"(CREATE\s+SCHEMA\s+)\[?" + src + @"\]?(?![\w])", $"$1[{dst}]", RegexOptions.IgnoreCase);
-            }
-            return script;
-        }
+        /// <summary>True when the given schema should be copied.</summary>
+        public bool IncludesSchema(string schema) =>
+            IncludeSchemas == null || (schema != null && IncludeSchemas.Contains(schema));
 
         public static CloneConfig Load(string path)
         {
@@ -173,7 +89,7 @@ namespace Sql2SqlCloner.Core
             config.Engine ??= new EngineConfig();
             config.Source ??= new EndpointConfig();
             config.Destination ??= new EndpointConfig();
-            config.Schemas ??= new List<SchemaMapEntry>();
+            config.Schemas ??= new List<SchemaEntry>();
             return config;
         }
     }
@@ -193,10 +109,10 @@ namespace Sql2SqlCloner.Core
         public string InsecureLocalTestPassword { get; set; }
     }
 
-    public class SchemaMapEntry
+    /// <summary>One entry in the optional <c>schemas:</c> include list (which schemas to copy).</summary>
+    public class SchemaEntry
     {
         public string Source { get; set; }
-        public string Destination { get; set; }
     }
 
     /// <summary>The ~18 copy toggles that the WinForms GUI used to persist in Properties.Settings.</summary>
