@@ -1,12 +1,20 @@
 ﻿using Microsoft.SqlServer.Management.Smo;
-using System.Drawing;
 using System.Linq;
 
 namespace Sql2SqlCloner.Core.SchemaTransfer
 {
+    public enum CopyStatus
+    {
+        None = 0,
+        Waiting,
+        Ok,
+        Warning,
+        Error
+    }
+
     public class SqlSchemaObject
     {
-        public Bitmap Status { get; set; }
+        public CopyStatus Status { get; set; }
         public string Name { get; set; }
         public string Type { get; set; }
         public bool CopyData { get; set; }

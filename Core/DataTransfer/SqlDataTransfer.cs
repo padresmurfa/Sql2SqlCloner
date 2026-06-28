@@ -2,15 +2,20 @@
 using Microsoft.SqlServer.Management.Common;
 using System;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Linq;
-using System.Windows.Forms;
 
 namespace Sql2SqlCloner.Core.DataTransfer
 {
     public class SqlDataTransfer : SqlTransfer
     {
         private SqlBulkCopy BulkCopy;
+
+        /// <summary>
+        /// Invoked when constraints cannot be enabled and the engine asks whether to delete
+        /// non-compliant data. The argument is the last error message; return true to delete.
+        /// Set by the host (CLI). When null, the engine does not delete (equivalent to "false").
+        /// </summary>
+        public Func<string, bool> ConfirmDeleteNonCompliantData { get; set; }
 
         public SqlDataTransfer(string src, string dest, IList<string> lstPostExecutionExecute) : base(src, dest, lstPostExecutionExecute)
         {
@@ -41,7 +46,7 @@ namespace Sql2SqlCloner.Core.DataTransfer
                 WHERE is_disabled=1 OR is_not_trusted=1";
 
             var finished = false;
-            var nonCompliantDataDeletion = ConfigurationManager.AppSettings["NonCompliantDataDeletion"].ToLowerInvariant();
+            var nonCompliantDataDeletion = (CloneConfig.Current?.Engine?.NonCompliantDataDeletion ?? "false").ToLowerInvariant();
             while (!finished)
             {
                 try
@@ -56,12 +61,11 @@ namespace Sql2SqlCloner.Core.DataTransfer
                 {
                     if (nonCompliantDataDeletion != "true" && nonCompliantDataDeletion != "false")
                     {
-                        nonCompliantDataDeletion = MessageBox.Show(
-                        "Could not enable constraints. Delete non-compliant data?" + Environment.NewLine + Environment.NewLine +
-                        $"Last error was: {ex.Message}", "Error",
-                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes
-                        ? "true"
-                        : "false";
+                        //"ask": defer to the host. With no host callback, default to not deleting.
+                        nonCompliantDataDeletion =
+                            (ConfirmDeleteNonCompliantData != null && ConfirmDeleteNonCompliantData(ex.Message))
+                            ? "true"
+                            : "false";
                     }
                     if (Convert.ToBoolean(nonCompliantDataDeletion))
                     {
@@ -126,8 +130,7 @@ namespace Sql2SqlCloner.Core.DataTransfer
                         }
                         if (deletedrows == 0)
                         {
-                            MessageBox.Show($"No data left to delete, could not enable constraints. Last error was: {ex.Message}");
-                            throw new Exception(ex.Message);
+                            throw new Exception($"No data left to delete, could not enable constraints. Last error was: {ex.Message}");
                         }
                     }
                     else
@@ -144,9 +147,9 @@ namespace Sql2SqlCloner.Core.DataTransfer
             }
         }
 
-        private IEnumerable<string> GetMapping(ServerConnection cxSource, ServerConnection cxTarget, string tableName)
+        private IEnumerable<string> GetMapping(ServerConnection cxSource, ServerConnection cxTarget, string sourceTableName, string destTableName)
         {
-            return GetSchema(cxSource, tableName).Intersect(GetSchema(cxTarget, tableName), StringComparer.OrdinalIgnoreCase);
+            return GetSchema(cxSource, sourceTableName).Intersect(GetSchema(cxTarget, destTableName), StringComparer.OrdinalIgnoreCase);
         }
 
         private IEnumerable<string> GetSchema(ServerConnection connection, string tableName)
@@ -241,15 +244,25 @@ namespace Sql2SqlCloner.Core.DataTransfer
             return null;
         }
 
-        public bool TransferData(string tableName, string query)
+        public bool TransferData(string tableName, string query) =>
+            TransferData(tableName, tableName, query);
+
+        /// <summary>
+        /// Copies rows produced by <paramref name="query"/> (read from the source) into
+        /// <paramref name="destTableName"/>. <paramref name="sourceTableName"/> is used only to resolve the
+        /// source column list; it differs from the destination name when the schema is being renamed.
+        /// </summary>
+        public bool TransferData(string destTableName, string sourceTableName, string query)
         {
+            var tableName = destTableName;
             SqlDataReader reader = null;
             var strDropIndex = new List<string>();
             try
             {
                 if (BulkCopy == null)
                 {
-                    if (!int.TryParse(ConfigurationManager.AppSettings["BatchSize"], out int batchSize))
+                    var batchSize = CloneConfig.Current?.Engine?.BatchSize ?? 5000;
+                    if (batchSize <= 0)
                     {
                         batchSize = 5000;
                     }
@@ -261,7 +274,7 @@ namespace Sql2SqlCloner.Core.DataTransfer
                     };
                 }
 
-                if (Properties.Settings.Default.IncrementalDataCopy)
+                if (CloneConfig.Current?.Options?.IncrementalDataCopy == true)
                 {
                     var uniqueColumns = GetUniqueColumns(destinationConnection, tableName);
                     if (uniqueColumns.Any())
@@ -292,7 +305,7 @@ namespace Sql2SqlCloner.Core.DataTransfer
 
                 BulkCopy.DestinationTableName = tableName;
                 BulkCopy.ColumnMappings.Clear();
-                GetMapping(SourceConnection, DestinationConnection, tableName).ToList().
+                GetMapping(SourceConnection, DestinationConnection, sourceTableName, tableName).ToList().
                     ForEach(columnName => BulkCopy.ColumnMappings.Add(new SqlBulkCopyColumnMapping(columnName, columnName)));
 
                 using (var command = GetSourceSqlCommand(sqlTimeout, query))

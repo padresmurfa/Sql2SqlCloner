@@ -1,0 +1,62 @@
+# Sql2SqlCloner job file. Pass it with:  Sql2SqlCloner --config job.yaml
+#
+# Keys use camelCase. Unknown keys are ignored. All sections are optional except
+# source.connectionString and destination.connectionString.
+#
+# SECRETS: a connectionString may live here only when it carries no password
+# (Azure AD / integrated security / no SQL login). If a SQL-auth connection string
+# omits the password, DO NOT put it here. Provide it instead via environment
+# variables (so it never reaches shell history), otherwise you will be prompted:
+#   SQL2SQL_SOURCE_PASSWORD   source password
+#   SQL2SQL_DEST_PASSWORD     destination password
+#   SQL2SQL_DAC_PASSWORD      'sa' password for the decrypt DAC (decryptObjects: true)
+
+source:
+  # Example SQL-auth (password supplied via SQL2SQL_SOURCE_PASSWORD or prompt):
+  connectionString: "Server=localhost,1433;Database=SourceDb;User Id=appuser;TrustServerCertificate=true"
+destination:
+  # Example Azure AD (no password needed in the string):
+  # connectionString: "Server=mydb.database.windows.net;Database=DestDb;Authentication=Active Directory Default;Encrypt=true"
+  connectionString: "Server=localhost,1433;Database=DestDb;User Id=appuser;TrustServerCertificate=true"
+
+options:                          # the copy toggles (formerly the GUI checkboxes)
+  copySchema: true                # create schema objects on the destination
+  copyData: true                  # bulk-copy table rows
+  copyConstraints: true           # indexes, foreign keys, checks
+  dropAndRecreateObjects: false   # DROP + CREATE existing destination objects (ignored if clearDestinationDatabase)
+  clearDestinationDatabase: false # drop ALL destination objects first (needs --yes for non-interactive runs)
+  copySecurity: false             # users, roles, schema authorization
+  copyExtendedProperties: true    # MS_Description and other extended properties
+  copyPermissions: false          # role memberships / grants
+  copyFullText: false             # full-text catalogs/indexes (requires copyConstraints)
+  stopIfErrors: true              # stop after schema errors on tables
+  copyCollation: Ignore_collation # Ignore_collation | No_collation | Keep_source_db_collation | Set_destination_db_collation
+  disableNotForReplication: false # strip NOT FOR REPLICATION from FKs/checks
+  deleteDestinationTables: false  # delete destination rows before a data-only copy (needs --yes)
+  ignoreFileGroup: true           # ignore source filegroups (create everything on PRIMARY)
+  decryptObjects: false           # decrypt WITH ENCRYPTION objects via DAC (needs 'sa' / SQL2SQL_DAC_PASSWORD)
+  incrementalDataCopy: false      # skip rows that already exist (unique-key based); ignored if deleteDestinationTables
+
+schemas:                          # OMIT this whole section to copy every non-system schema with no renaming.
+  - source: dbo                   # copy dbo as-is
+  - source: sales                 # copy 'sales' ...
+    destination: sales_archive    # ... into 'sales_archive' on the destination
+  - source: hr
+    destination: people
+
+engine:                           # tuning (formerly <appSettings>)
+  batchSize: 5000                 # SqlBulkCopy batch size
+  sqlTimeout: 1800                # command timeout in seconds
+  defaultPassword: "D3F@u1TP@s$W0rd!" # password used when creating logins for copied users with no password
+  raiserrorTransform: true        # convert old RAISERROR syntax when crossing the SQL2012 boundary
+  nonCompliantDataDeletion: ask   # true | false | ask  (what to do when data blocks enabling constraints)
+  alwaysIncludeTables: ""         # comma list of system tables to include anyway, e.g. "[dbo].[sysdiagrams]"
+  enablePreload: false            # preload source objects in parallel (different servers only)
+  enableBackgroundProcessing: false # (no longer used by the CLI; objects are processed in one pass)
+  disableDisabledObjects: false   # after copying, re-disable constraints/triggers/indexes that were disabled in the source
+  excludeObjects: ""              # comma list of objects to skip entirely; trailing '*' is a prefix wildcard
+  excludeDataLoading: ""          # comma list of tables whose DATA should not be copied (schema still copied)
+  filterDataLoading: ""           # per-table data filters, comma-separated. Each: "<schema.table> TOP n" |
+                                  #   "<schema.table> WHERE <col> <cond>" | "<schema.table> ORDER BY <cols>"
+                                  #   e.g. "dbo.BigLog TOP 1000, dbo.Orders WHERE Status = 1"
+  globalTop: 0                    # cap rows copied per table (0 = no cap)

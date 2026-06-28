@@ -6,7 +6,6 @@ using Microsoft.SqlServer.Management.SqlParser.Parser;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -319,15 +318,17 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                 {
                     namewithschema = $"{obj.GetType().GetProperty("Schema").GetValue(obj, null)}.{namewithschema}";
                 }
+                //the destination object is stored under the (possibly renamed) schema, so compare against the mapped name
+                var destNameWithSchema = CloneConfig.Current?.MapQualifiedName(namewithschema) ?? namewithschema;
 
                 if (dropIfExists)
                 {
-                    if (DestinationObjects.Any(d => d.Name == namewithschema || d.Name == obj.Name))
+                    if (DestinationObjects.Any(d => d.Name == destNameWithSchema || d.Name == obj.Name))
                     {
                         transfer.Options.ScriptDrops = true;
                         foreach (var script in transfer.ScriptTransfer())
                         {
-                            command.CommandText = script;
+                            command.CommandText = CloneConfig.Current?.ApplySchemaRenames(script) ?? script;
                             command.ExecuteNonQuery();
                         }
                     }
@@ -376,7 +377,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                         }
 
                         objectName = objectName.Substring(0, currindex + 1).Replace("'", "");
-                        if (!Properties.Settings.Default.DecryptObjects || DACconnection == null)
+                        if (CloneConfig.Current?.Options?.DecryptObjects != true || DACconnection == null)
                         {
                             incompatibleErrorMsg += $" {(incompatSchema + "." + objectName).Replace("'", "")}";
                         }
@@ -424,12 +425,13 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                         continue;
                     }
 
-                    //create schema if not exists
+                    //create schema if not exists (under the renamed destination name when remapping)
                     var schemaname = obj.GetType().GetProperty("Schema")?.GetValue(obj, null).ToString();
                     if (!string.IsNullOrEmpty(schemaname) && !existingschemas.Contains(schemaname))
                     {
+                        var destschemaname = CloneConfig.Current?.MapSchema(schemaname) ?? schemaname;
                         command.CommandText =
-                            $"IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name=N'{schemaname}') EXEC('CREATE SCHEMA [{schemaname}]{GetSchemaAuthorization(obj.Name)}')";
+                            $"IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name=N'{destschemaname}') EXEC('CREATE SCHEMA [{destschemaname}]{GetSchemaAuthorization(obj.Name)}')";
                         command.ExecuteNonQuery();
                         existingschemas.Add(schemaname);
                     }
@@ -469,7 +471,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                                 END";
                             command.CommandText = string.Format(createLoginSql, obj.Name,
                                 string.IsNullOrWhiteSpace(password)
-                                    ? (ConfigurationManager.AppSettings["DefaultPassword"] ?? "D3F@u1TP@s$W0rd!")
+                                    ? (CloneConfig.Current?.Engine?.DefaultPassword ?? "D3F@u1TP@s$W0rd!")
                                     : password);
                             command.ExecuteNonQuery();
                         }
@@ -480,6 +482,9 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                                 .Replace(" FROM  EXTERNAL PROVIDER", "");
                         }
                     }
+
+                    //rewrite schema-qualified identifiers to the destination schema when remapping
+                    scriptRun = CloneConfig.Current?.ApplySchemaRenames(scriptRun) ?? scriptRun;
 
                     try
                     {
@@ -606,8 +611,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                 var creating_name = false;
                 var objectname_already_replaced = false;
                 var triggerON = false;
-                var RaiserrorTransform = string.Equals(ConfigurationManager.AppSettings["RaiserrorTransform"], "true",
-                    StringComparison.InvariantCultureIgnoreCase);
+                var RaiserrorTransform = CloneConfig.Current?.Engine?.RaiserrorTransform ?? true;
                 if (RaiserrorTransform &&
                     ((sourceDatabase.IsRunningMinimumSQLVersion(SQL_DB_Compatibility.DB_2012) &&
                       destinationDatabase.IsRunningMinimumSQLVersion(SQL_DB_Compatibility.DB_2012)) ||
@@ -1184,7 +1188,14 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                     firstRun = false;
                 }
 
-                RecreateObjects.Add(SourceObjects.Single(s => s.Name == obj.Name && s.Type == obj.Type));
+                //destination objects carry the (possibly renamed) schema; match the source object by its mapped name
+                var sourceObject = SourceObjects.SingleOrDefault(s =>
+                    (CloneConfig.Current?.MapQualifiedName(s.Name) ?? s.Name) == obj.Name && s.Type == obj.Type);
+                if (sourceObject == null)
+                {
+                    continue;
+                }
+                RecreateObjects.Add(sourceObject);
                 try
                 {
                     if (DestinationObjects.Any(d => d.Type == obj.Type && d.Name == obj.Name))
@@ -1451,7 +1462,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                 return items;
             }
 
-            var alwaysIncludeTables = ConfigurationManager.AppSettings["AlwaysIncludeTables"];
+            var alwaysIncludeTables = CloneConfig.Current?.Engine?.AlwaysIncludeTables;
             IList<string> alwaysIncludeTablesList = new List<string>();
             if (!string.IsNullOrEmpty(alwaysIncludeTables))
             {
@@ -1605,21 +1616,23 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
         {
             if (obj is Table tb)
             {
+                var mappedSchema = CloneConfig.Current?.MapSchema(tb.Schema) ?? tb.Schema;
                 try
                 {
-                    return destinationDatabase.Tables[tb.Name, tb.Schema];
+                    return destinationDatabase.Tables[tb.Name, mappedSchema];
                 }
                 catch
                 {
-                    throw new Exception($"Table {tb.Owner}.{tb.Schema} not found");
+                    throw new Exception($"Table {tb.Owner}.{mappedSchema} not found");
                 }
             }
             else
             {
                 var vw = obj as View;
+                var mappedSchema = CloneConfig.Current?.MapSchema(vw.Schema) ?? vw.Schema;
                 try
                 {
-                    return destinationDatabase.Views[vw.Name, vw.Schema] ??
+                    return destinationDatabase.Views[vw.Name, mappedSchema] ??
                            (TableViewBase)destinationDatabase.Views[vw.Name, vw.Owner];
                 }
                 catch
@@ -1876,7 +1889,8 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                     IsEnabled = sourcefk.IsEnabled,
                     NotForReplication = !disableNotForReplication && sourcefk.NotForReplication,
                     ReferencedTable = sourcefk.ReferencedTable,
-                    ReferencedTableSchema = sourcefk.ReferencedTableSchema,
+                    //remap the referenced table's schema when its schema is being renamed
+                    ReferencedTableSchema = CloneConfig.Current?.MapSchema(sourcefk.ReferencedTableSchema) ?? sourcefk.ReferencedTableSchema,
                     UpdateAction = sourcefk.UpdateAction
                 };
 
@@ -1959,7 +1973,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                         SourceObjects = GetSqlObjects(SourceConnection, sourceDatabase);
                     }
                 }, CancelToken);
-                if (sameserver || (ConfigurationManager.AppSettings["EnablePreload"]?.ToLower() != "true"))
+                if (sameserver || (CloneConfig.Current?.Engine?.EnablePreload != true))
                 {
                     tskSource.Wait(CancelToken);
                 }
@@ -1978,8 +1992,6 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
 
         public void ClearDestinationDatabase(Action<NamedSmoObject> callback = null)
         {
-            var mainContext = Thread.CurrentContext;
-
             var lastError = "";
             if (DestinationObjects.Count == 0)
             {
@@ -2088,7 +2100,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
                                     command.ExecuteNonQuery();
                                     processed++;
                                     Monitor.Enter(lockFlag);
-                                    mainContext.DoCallBack(() => callback?.Invoke(obj));
+                                    callback?.Invoke(obj);
                                     Monitor.Exit(lockFlag);
                                 }
                             }

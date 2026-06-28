@@ -3,7 +3,6 @@ using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Smo;
 using System;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Linq;
 
 namespace Sql2SqlCloner.Core
@@ -33,10 +32,7 @@ namespace Sql2SqlCloner.Core
             dbSource = new Server(SourceConnection).Databases[SourceDatabaseName];
             dbDestination = new Server(DestinationConnection).Databases[DestinationDatabaseName];
 
-            if (!int.TryParse(ConfigurationManager.AppSettings["SqlTimeout"], out sqlTimeout))
-            {
-                sqlTimeout = 1800; //30 minutes
-            }
+            sqlTimeout = CloneConfig.Current?.Engine?.SqlTimeout ?? 1800; //default 30 minutes
             lstPostExecutionExecute?.ToList().ForEach(item => LstPostExecutionExecute.Add(item));
         }
 
@@ -96,7 +92,10 @@ namespace Sql2SqlCloner.Core
                             {
                                 try
                                 {
-                                    commandDestination.CommandText = (string)reader[0];
+                                    //these statements are generated from SOURCE metadata and executed on the
+                                    //DESTINATION, so any renamed schema must be mapped before running them
+                                    commandDestination.CommandText =
+                                        CloneConfig.Current?.ApplySchemaRenames((string)reader[0]) ?? (string)reader[0];
                                     commandDestination.ExecuteNonQuery();
                                 }
                                 catch { }
