@@ -7,6 +7,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -103,14 +104,6 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
         private void InitServer(Server serv)
         {
             serv.SetDefaultInitFields(true);
-            //Database.DefaultSchema cannot be retrieved when the connecting login authenticates via a
-            //Windows/AD group (such logins have no user-level DEFAULT_SCHEMA). With prefetch-all enabled,
-            //SMO eagerly loads every Database property when the scripter calls SetParent on the database,
-            //so that one unavailable property makes EVERY object fail to script with
-            //"Property DefaultSchema is not available for Database '[...]'". Exclude Database from the
-            //prefetch-all set: its properties are then loaded lazily only when actually needed (the
-            //scripter never needs DefaultSchema), while child objects (tables, views, ...) still prefetch.
-            serv.SetDefaultInitFields(typeof(Database), false);
         }
 
         private void ResetTransfer()
@@ -1949,6 +1942,7 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
             sourceServer = new Server(sourceConnection);
             InitServer(sourceServer);
             sourceDatabase = sourceServer.Databases[SourceDatabaseName];
+            EnsureDefaultSchema(sourceDatabase);
         }
 
         public void RefreshDestination()
@@ -1957,6 +1951,51 @@ namespace Sql2SqlCloner.Core.SchemaTransfer
             destinationServer = new Server(destinationConnection);
             InitServer(destinationServer);
             destinationDatabase = destinationServer.Databases[DestinationDatabaseName];
+            EnsureDefaultSchema(destinationDatabase);
+        }
+
+        //When the connecting login authenticates via a Windows/AD group (or is mapped to a certificate /
+        //asymmetric key) it has no user-level DEFAULT_SCHEMA, so the database's DefaultSchema comes
+        //back NULL and SMO's Database.DefaultSchema getter throws
+        //"Property DefaultSchema is not available for Database". The SMO scripter reads that property
+        //while scripting, so EVERY object then fails with "SetParent failed for View ...". Force a
+        //cached value so the getter stops throwing. Once the property is flagged unavailable, BOTH the
+        //public getter and the public setter (and the string indexer) throw, so we reach the Property
+        //object through enumeration and write it via SMO's internal SetValue/SetRetrieved. Normal logins
+        //keep their real default schema (we return early before touching anything).
+        private static void EnsureDefaultSchema(Database db)
+        {
+            if (db == null)
+            {
+                return;
+            }
+            try
+            {
+                if (!string.IsNullOrEmpty(db.DefaultSchema))
+                {
+                    return; //retrievable (normal login) -> leave the real value untouched
+                }
+            }
+            catch
+            {
+                //getter threw (group/cert/asymmetric-key login with no DEFAULT_SCHEMA) -> inject below
+            }
+            try
+            {
+                var prop = db.Properties.Cast<Property>().FirstOrDefault(p => p.Name == "DefaultSchema");
+                if (prop == null)
+                {
+                    return;
+                }
+                typeof(Property).GetMethod("SetValue", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.Invoke(prop, new object[] { "dbo" });
+                typeof(Property).GetMethod("SetRetrieved", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.Invoke(prop, new object[] { true });
+            }
+            catch
+            {
+                //best effort; normal logins already returned above
+            }
         }
 
         public void RefreshDestinationObjects()
