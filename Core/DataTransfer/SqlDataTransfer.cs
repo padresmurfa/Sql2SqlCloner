@@ -308,7 +308,14 @@ namespace Sql2SqlCloner.Core.DataTransfer
 
                 if (!string.IsNullOrEmpty(masterhistorytable))
                 {
-                    using (var command = GetDestinationSqlCommand(sqlTimeout, $"ALTER TABLE {masterhistorytable} SET(SYSTEM_VERSIONING=ON (HISTORY_TABLE = {tableName}, DATA_CONSISTENCY_CHECK=ON))"))
+                    //Use DATA_CONSISTENCY_CHECK=OFF when re-enabling system versioning. The current
+                    //(main) table is bulk-copied separately and its period columns are GENERATED ALWAYS,
+                    //so the copied current rows get fresh ValidFrom timestamps while the history table
+                    //keeps the original periods. A strict consistency check then rejects the result with
+                    //"history table contains overlapping records" (the standard temporal-migration
+                    //caveat). OFF re-enables versioning without re-validating the copied data, which is
+                    //correct for cloning.
+                    using (var command = GetDestinationSqlCommand(sqlTimeout, $"ALTER TABLE {masterhistorytable} SET(SYSTEM_VERSIONING=ON (HISTORY_TABLE = {tableName}, DATA_CONSISTENCY_CHECK=OFF))"))
                     {
                         command.ExecuteNonQuery();
                     }
