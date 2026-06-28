@@ -181,6 +181,16 @@ namespace Sql2SqlCloner.Core
     public class EndpointConfig
     {
         public string ConnectionString { get; set; }
+
+        /// <summary>
+        /// Optional inline password for NON-SENSITIVE databases only (local / disposable test
+        /// databases). It is stored in clear text in the YAML file, so it must NEVER be used for
+        /// production or any real / shared database — use the SQL2SQL_*_PASSWORD environment
+        /// variables or the masked prompt for those. It is applied only when the connection string
+        /// has a User Id, has no password, and is not using integrated / Azure AD auth. The matching
+        /// environment variable, when present, takes precedence over this value.
+        /// </summary>
+        public string InsecureLocalTestPassword { get; set; }
     }
 
     public class SchemaMapEntry
